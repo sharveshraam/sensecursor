@@ -15,7 +15,9 @@ class RecognizeRequest(BaseModel):
 
 class ExportRequest(BaseModel):
     workspace_name: str
+    strokes: list = []
     text_blocks: list
+    background_image: str | None = None
     page_width: int = 1400
     page_height: int = 900
 
@@ -46,7 +48,9 @@ def recognize(request: RecognizeRequest):
 def export(request: ExportRequest):
     pdf_bytes = export_workspace_pdf(
         request.workspace_name,
+        request.strokes,
         request.text_blocks,
+        background_image=request.background_image,
         page_width=request.page_width,
         page_height=request.page_height,
     )

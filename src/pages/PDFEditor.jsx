@@ -3,27 +3,63 @@ import { Upload } from "lucide-react";
 import CanvasEngine from "../components/CanvasEngine";
 import WorkspaceShell from "../components/WorkspaceShell";
 import useWorkspaceController from "../hooks/useWorkspaceController";
+import { renderPdfFirstPage } from "../utils/pdfPreview";
 
 function PDFEditor() {
   const controller = useWorkspaceController("pdf");
   const [pdfFile, setPdfFile] = useState(null);
   const [background, setBackground] = useState(controller.state.pdfPreview || null);
+  const [status, setStatus] = useState({
+    title: "PDF editor ready",
+    detail: "Load a document, annotate over the rendered preview, and export a polished review copy.",
+  });
+  const layerSummary = useMemo(
+    () => ({
+      strokes: controller.state.strokes.length,
+      text: controller.state.textBlocks.length,
+    }),
+    [controller.state.strokes.length, controller.state.textBlocks.length],
+  );
 
   const badge = useMemo(
     () => (pdfFile ? `${pdfFile.name} loaded` : "Upload a PDF to annotate"),
     [pdfFile],
   );
 
-  function handlePdfUpload(event) {
+  async function handlePdfUpload(event) {
     const file = event.target.files?.[0];
     if (!file) {
       return;
     }
 
-    const url = URL.createObjectURL(file);
-    setPdfFile(file);
-    setBackground(url);
-    controller.setState((value) => ({ ...value, pdfPreview: url, pdfName: file.name }));
+    setStatus({
+      title: "Rendering PDF preview",
+      detail: "Preparing the first page as a live annotation surface.",
+    });
+
+    try {
+      const preview = await renderPdfFirstPage(file);
+      setPdfFile(file);
+      setBackground(preview.preview);
+      controller.setState((value) => ({
+        ...value,
+        pdfPreview: preview.preview,
+        pdfName: file.name,
+        pageWidth: Math.round(preview.width),
+        pageHeight: Math.round(preview.height),
+        pdfPages: preview.pages,
+      }));
+      setStatus({
+        title: "PDF loaded",
+        detail: `Rendered page 1 of ${preview.pages}. You can now annotate and convert handwriting on top.`,
+      });
+    } catch (error) {
+      console.error("PDF preview failed", error);
+      setStatus({
+        title: "Preview failed",
+        detail: "The PDF could not be rendered, so the annotation surface stayed unchanged.",
+      });
+    }
   }
 
   return (
@@ -41,6 +77,12 @@ function PDFEditor() {
       onConvert={() => controller.setConvertSignal((value) => value + 1)}
       onExportPdf={controller.handleExportPdf}
       onSaveJson={controller.handleSaveJson}
+      onPenColorChange={(color) => controller.updateSettings("penColor", color)}
+      replaying={controller.replaying}
+      onReplayToggle={() => controller.setReplaying((value) => !value)}
+      layerSummary={layerSummary}
+      conversionMode={controller.settings.cleanTextMode ? "Clean Text" : "Raw Ink"}
+      status={status}
     >
       <input
         ref={controller.colorInputRef}
@@ -64,6 +106,9 @@ function PDFEditor() {
         panEnabled={controller.panEnabled}
         pdfBackground={background}
         convertSignal={controller.convertSignal}
+        replaying={controller.replaying}
+        onReplayFinished={() => controller.setReplaying(false)}
+        onStatusChange={setStatus}
       />
     </WorkspaceShell>
   );

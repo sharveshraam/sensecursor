@@ -14,6 +14,7 @@ function useWorkspaceController(workspaceKey) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [panEnabled, setPanEnabled] = useState(false);
   const [convertSignal, setConvertSignal] = useState(0);
+  const [replaying, setReplaying] = useState(false);
   const [state, setState] = useState(
     () =>
       loadWorkspaceState(workspaceKey) || {
@@ -87,9 +88,11 @@ function useWorkspaceController(workspaceKey) {
   async function handleExportPdf() {
     await exportWorkspacePdf({
       name: workspaceKey,
+      strokes: state.strokes,
       textBlocks: state.textBlocks,
-      width: workspaceKey === "canvas" ? 2200 : 1400,
-      height: workspaceKey === "pdf" ? 1600 : 900,
+      backgroundImage: state.pdfPreview || null,
+      width: state.pageWidth || (workspaceKey === "canvas" ? 2200 : 1400),
+      height: state.pageHeight || (workspaceKey === "pdf" ? 1600 : 900),
     });
   }
 
@@ -107,19 +110,21 @@ function useWorkspaceController(workspaceKey) {
       settingsOpen,
       panEnabled,
       convertSignal,
+      replaying,
       state,
       colorInputRef,
       setState,
       setSettingsOpen,
       setPanEnabled,
       setConvertSignal,
+      setReplaying,
       updateSettings,
       undo,
       redo,
       handleExportPdf,
       handleSaveJson,
     }),
-    [settings, settingsOpen, panEnabled, convertSignal, state],
+    [settings, settingsOpen, panEnabled, convertSignal, replaying, state],
   );
 }
 

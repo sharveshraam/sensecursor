@@ -7,8 +7,11 @@ import {
   groupStrokesIntoWords,
   simplifyPointFromEvent,
 } from "../utils/strokeUtils";
+import { recognizeWord } from "../utils/api";
 
 const PROCESS_DELAY = 1200;
+const TEXT_FADE_MS = 260;
+const REPLAY_INTERVAL_MS = 110;
 
 function CanvasEngine({
   settings,
@@ -18,27 +21,42 @@ function CanvasEngine({
   panEnabled,
   pdfBackground,
   convertSignal = 0,
+  replaying = false,
+  onReplayFinished,
+  onStatusChange,
 }) {
   const canvasRef = useRef(null);
+  const timeoutRef = useRef(null);
+  const replayTimerRef = useRef(null);
+  const lastPanPoint = useRef(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [currentStroke, setCurrentStroke] = useState(null);
   const [ghostBlock, setGhostBlock] = useState(null);
+  const [isPanning, setIsPanning] = useState(false);
+  const [animationClock, setAnimationClock] = useState(Date.now());
   const [transform, setTransform] = useState(
     state.transform || { x: 0, y: 0, scale: 1 },
   );
-  const [isPanning, setIsPanning] = useState(false);
-  const lastPanPoint = useRef(null);
-  const timeoutRef = useRef(null);
+  const [replayProgress, setReplayProgress] = useState(0);
 
   const dimensions = useMemo(() => {
     if (mode === "canvas") {
-      return { width: 2200, height: 1400 };
+      return {
+        width: state.pageWidth || 2200,
+        height: state.pageHeight || 1400,
+      };
     }
     if (mode === "pdf") {
-      return { width: 1200, height: 1600 };
+      return {
+        width: state.pageWidth || 1240,
+        height: state.pageHeight || 1600,
+      };
     }
-    return { width: 1400, height: 900 };
-  }, [mode]);
+    return {
+      width: state.pageWidth || 1440,
+      height: state.pageHeight || 920,
+    };
+  }, [mode, state.pageHeight, state.pageWidth]);
 
   const fullState = useMemo(
     () => ({
@@ -54,6 +72,37 @@ function CanvasEngine({
     [state],
   );
 
+  const visibleStrokes = useMemo(() => {
+    if (!replaying) {
+      return fullState.strokes;
+    }
+    const ids = new Set(fullState.replay.slice(0, replayProgress).map((stroke) => stroke.id));
+    return fullState.replay.filter((stroke) => ids.has(stroke.id));
+  }, [fullState.replay, fullState.strokes, replayProgress, replaying]);
+
+  const visibleTextBlocks = useMemo(() => {
+    const now = animationClock;
+    const textBlocks = replaying
+      ? fullState.textBlocks.filter((block) => {
+          const latestSourceIndex = Math.max(
+            ...block.sourceStrokeIds.map((id) =>
+              fullState.replay.findIndex((stroke) => stroke.id === id),
+            ),
+          );
+          return latestSourceIndex >= 0 && latestSourceIndex < replayProgress;
+        })
+      : fullState.textBlocks;
+
+    return textBlocks.map((block) => {
+      if (!block.createdAt) {
+        return { ...block, opacity: block.opacity ?? 1 };
+      }
+      const elapsed = Math.max(0, now - block.createdAt);
+      const alpha = Math.min(1, elapsed / TEXT_FADE_MS);
+      return { ...block, opacity: alpha };
+    });
+  }, [animationClock, fullState.replay, fullState.textBlocks, replayProgress, replaying]);
+
   useEffect(() => {
     onStateChange({ ...fullState, transform });
   }, [transform]);
@@ -65,6 +114,18 @@ function CanvasEngine({
   }, [convertSignal]);
 
   useEffect(() => {
+    const hasAnimatedText = fullState.textBlocks.some(
+      (block) => block.createdAt && Date.now() - block.createdAt < TEXT_FADE_MS,
+    );
+    if (!hasAnimatedText && !replaying && !ghostBlock) {
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => setAnimationClock(Date.now()), 16);
+    return () => window.clearTimeout(timer);
+  }, [animationClock, fullState.textBlocks, replaying, ghostBlock]);
+
+  useEffect(() => {
     const canvas = canvasRef.current;
     const context = canvas.getContext("2d");
     const ratio = window.devicePixelRatio || 1;
@@ -74,9 +135,54 @@ function CanvasEngine({
     canvas.style.height = `${dimensions.height}px`;
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
     drawScene(context);
-  }, [dimensions, fullState, currentStroke, ghostBlock, settings.backgroundStyle, transform, pdfBackground]);
+  }, [
+    animationClock,
+    currentStroke,
+    dimensions,
+    ghostBlock,
+    pdfBackground,
+    settings.backgroundStyle,
+    transform,
+    visibleStrokes,
+    visibleTextBlocks,
+  ]);
 
-  useEffect(() => () => window.clearTimeout(timeoutRef.current), []);
+  useEffect(() => {
+    if (!replaying) {
+      window.clearInterval(replayTimerRef.current);
+      setReplayProgress(0);
+      return;
+    }
+
+    setReplayProgress(0);
+    onStatusChange?.({
+      title: "Replay running",
+      detail: "Playing back captured strokes and text layer timing.",
+    });
+
+    replayTimerRef.current = window.setInterval(() => {
+      setReplayProgress((value) => {
+        const next = value + 1;
+        if (next > fullState.replay.length) {
+          window.clearInterval(replayTimerRef.current);
+          onReplayFinished?.();
+          onStatusChange?.({
+            title: "Replay complete",
+            detail: "Stroke history is available for undo, replay, and future collaboration hooks.",
+          });
+          return fullState.replay.length;
+        }
+        return next;
+      });
+    }, REPLAY_INTERVAL_MS);
+
+    return () => window.clearInterval(replayTimerRef.current);
+  }, [fullState.replay, onReplayFinished, onStatusChange, replaying]);
+
+  useEffect(() => () => {
+    window.clearTimeout(timeoutRef.current);
+    window.clearInterval(replayTimerRef.current);
+  }, []);
 
   function drawScene(context) {
     context.clearRect(0, 0, dimensions.width, dimensions.height);
@@ -85,12 +191,12 @@ function CanvasEngine({
     context.scale(transform.scale, transform.scale);
 
     drawBackground(context);
-    fullState.strokes.forEach((stroke) => drawStroke(context, stroke));
-    if (currentStroke) {
+    visibleStrokes.forEach((stroke) => drawStroke(context, stroke));
+    if (currentStroke && !replaying) {
       drawStroke(context, currentStroke);
     }
-    fullState.textBlocks.forEach((block) => drawTextBlock(context, block));
-    if (ghostBlock) {
+    visibleTextBlocks.forEach((block) => drawTextBlock(context, block));
+    if (ghostBlock && !replaying) {
       drawGhostBlock(context, ghostBlock);
     }
     context.restore();
@@ -98,9 +204,13 @@ function CanvasEngine({
 
   function drawBackground(context) {
     context.save();
-    context.fillStyle = pdfBackground ? "#ffffff" : "rgba(255,255,255,0.74)";
+    context.fillStyle = "#ffffff";
     context.fillRect(0, 0, dimensions.width, dimensions.height);
     context.restore();
+
+    if (pdfBackground) {
+      return;
+    }
 
     if (settings.backgroundStyle === "blank") {
       return;
@@ -157,7 +267,7 @@ function CanvasEngine({
 
   function drawGhostBlock(context, block) {
     context.save();
-    context.globalAlpha = 0.55;
+    context.globalAlpha = 0.58;
     context.fillStyle = "#5f7df5";
     context.font = `${block.fontSize}px Manrope`;
     context.fillText(block.text, block.x, block.y + block.fontSize);
@@ -171,6 +281,7 @@ function CanvasEngine({
       replay: fullState.replay,
       transform,
     });
+
     onStateChange({
       ...fullState,
       ...nextState,
@@ -181,7 +292,7 @@ function CanvasEngine({
 
   function eraseIntersectingStrokes(eraserStroke) {
     const eraserBounds = getWordBounds([eraserStroke]);
-    return fullState.strokes.filter((stroke) => {
+    const remainingStrokes = fullState.strokes.filter((stroke) => {
       const bounds = getWordBounds([stroke]);
       const intersects =
         eraserBounds.left <= bounds.right &&
@@ -190,15 +301,36 @@ function CanvasEngine({
         eraserBounds.bottom >= bounds.top;
       return !intersects;
     });
+
+    const remainingTextBlocks = fullState.textBlocks.filter((block) => {
+      const right = block.x + block.text.length * (block.fontSize * 0.58);
+      const bottom = block.y + block.fontSize;
+      const intersects =
+        eraserBounds.left <= right &&
+        eraserBounds.right >= block.x &&
+        eraserBounds.top <= bottom &&
+        eraserBounds.bottom >= block.y;
+      return !intersects;
+    });
+
+    return { remainingStrokes, remainingTextBlocks };
   }
 
   function handlePointerDown(event) {
+    if (replaying) {
+      return;
+    }
+
     const canvas = canvasRef.current;
     canvas.setPointerCapture(event.pointerId);
 
     if (panEnabled) {
       setIsPanning(true);
       lastPanPoint.current = { x: event.clientX, y: event.clientY };
+      onStatusChange?.({
+        title: "Pan mode active",
+        detail: "Drag to move around the workspace. Release Space to return to writing.",
+      });
       return;
     }
 
@@ -212,6 +344,10 @@ function CanvasEngine({
 
     setCurrentStroke(stroke);
     setIsDrawing(true);
+    onStatusChange?.({
+      title: fullState.activeTool === "eraser" ? "Erasing layer" : "Capturing ink",
+      detail: "Pointer events are being recorded with position and timestamp metadata.",
+    });
   }
 
   function handlePointerMove(event) {
@@ -244,6 +380,10 @@ function CanvasEngine({
     if (isPanning) {
       setIsPanning(false);
       lastPanPoint.current = null;
+      onStatusChange?.({
+        title: "Pan complete",
+        detail: "Workspace position updated. You can continue writing or zooming.",
+      });
       return;
     }
 
@@ -251,14 +391,20 @@ function CanvasEngine({
       return;
     }
 
-    const nextStrokes =
-      currentStroke.tool === "eraser"
-        ? eraseIntersectingStrokes(currentStroke)
-        : [...fullState.strokes, currentStroke];
+    let nextStrokes = fullState.strokes;
+    let nextTextBlocks = fullState.textBlocks;
+
+    if (currentStroke.tool === "eraser") {
+      const erased = eraseIntersectingStrokes(currentStroke);
+      nextStrokes = erased.remainingStrokes;
+      nextTextBlocks = erased.remainingTextBlocks;
+    } else {
+      nextStrokes = [...fullState.strokes, currentStroke];
+    }
 
     pushHistory({
       strokes: nextStrokes,
-      textBlocks: fullState.textBlocks,
+      textBlocks: nextTextBlocks,
       replay: [...fullState.replay, currentStroke],
       transform,
       activeTool: fullState.activeTool,
@@ -274,10 +420,19 @@ function CanvasEngine({
     timeoutRef.current = window.setTimeout(() => {
       processLatestWord(strokes);
     }, PROCESS_DELAY);
+
+    onStatusChange?.({
+      title: "Awaiting conversion",
+      detail: "Stroke gap and timeout heuristics are watching for the end of the current word.",
+    });
   }
 
   async function processLatestWord(strokes = fullState.strokes) {
     if (!settings.cleanTextMode) {
+      onStatusChange?.({
+        title: "Raw Ink Mode",
+        detail: "Clean text conversion is off, so handwriting remains untouched on the canvas.",
+      });
       return;
     }
 
@@ -288,38 +443,39 @@ function CanvasEngine({
 
     const groups = groupStrokesIntoWords(penStrokes);
     const latestGroup = groups[groups.length - 1];
+    const alreadyConverted = fullState.textBlocks.some((block) =>
+      latestGroup.every((stroke) => block.sourceStrokeIds?.includes(stroke.id)),
+    );
+    if (alreadyConverted) {
+      return;
+    }
+
     const bounds = getWordBounds(latestGroup);
     if (!bounds) {
       return;
     }
 
-    const preview = {
+    setGhostBlock({
       text: "recognizing...",
       x: bounds.left,
       y: bounds.top,
       fontSize: Math.max(18, bounds.height * 0.9),
-    };
-
-    setGhostBlock(preview);
+    });
+    onStatusChange?.({
+      title: "Recognizing handwriting",
+      detail: "Sending the latest grouped stroke cluster to the FastAPI recognition endpoint.",
+    });
 
     try {
-      const response = await fetch("http://127.0.0.1:8000/recognize", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ strokes: latestGroup }),
-      });
-
-      const data = await response.json();
+      const data = await recognizeWord(latestGroup);
       const textBlock = {
         id: crypto.randomUUID(),
         text: data.text || "hello",
-        x: bounds.left,
-        y: bounds.top,
-        fontSize: Math.max(18, bounds.height * 0.9),
+        x: data.bounding_box?.left ?? bounds.left,
+        y: data.bounding_box?.top ?? bounds.top,
+        fontSize: Math.max(18, (data.bounding_box?.height ?? bounds.height) * 0.9),
         color: "#15213d",
-        opacity: 1,
+        createdAt: Date.now(),
         sourceStrokeIds: latestGroup.map((stroke) => stroke.id),
       };
 
@@ -334,15 +490,24 @@ function CanvasEngine({
         transform,
         activeTool: fullState.activeTool,
       });
+
+      onStatusChange?.({
+        title: "Text layer created",
+        detail: `Converted the latest word into "${textBlock.text}" while preserving placement and scale.`,
+      });
     } catch (error) {
       console.error("Recognition request failed", error);
+      onStatusChange?.({
+        title: "Backend unavailable",
+        detail: "Recognition could not complete, so the raw ink stays visible and editable.",
+      });
     } finally {
-      window.setTimeout(() => setGhostBlock(null), 250);
+      window.setTimeout(() => setGhostBlock(null), 220);
     }
   }
 
   function handleWheel(event) {
-    if (mode !== "canvas") {
+    if (mode !== "canvas" && mode !== "pdf") {
       return;
     }
 
@@ -352,16 +517,23 @@ function CanvasEngine({
       ...value,
       scale: Math.min(2.5, Math.max(0.45, Number((value.scale + delta).toFixed(2)))),
     }));
+
+    onStatusChange?.({
+      title: "Zoom adjusted",
+      detail: `Workspace zoom is now ${Math.round(
+        Math.min(2.5, Math.max(0.45, (transform.scale + delta))) * 100,
+      )}%.`,
+    });
   }
 
   return (
     <div className="relative h-full min-h-[72vh] overflow-auto rounded-[26px]">
       <div className={`relative rounded-[26px] ${mode === "canvas" ? "min-w-[2200px]" : ""}`}>
         {pdfBackground ? (
-          <iframe
+          <img
             src={pdfBackground}
-            title="Uploaded PDF"
-            className="pointer-events-none absolute inset-0 h-full w-full rounded-[24px] border-0"
+            alt="PDF page preview"
+            className="pointer-events-none absolute inset-0 h-full w-full rounded-[24px] object-contain"
           />
         ) : null}
 

@@ -2,6 +2,7 @@ import { ArrowLeft, Layers3, Move, PenLine, Sparkles } from "lucide-react";
 import { Link } from "react-router-dom";
 import Toolbar from "./Toolbar";
 import SettingsPanel from "./SettingsPanel";
+import FloatingToolPanel from "./FloatingToolPanel";
 
 function WorkspaceShell({
   title,
@@ -17,6 +18,12 @@ function WorkspaceShell({
   onConvert,
   onExportPdf,
   onSaveJson,
+  onPenColorChange,
+  replaying,
+  onReplayToggle,
+  layerSummary,
+  conversionMode,
+  status,
   children,
 }) {
   return (
@@ -76,6 +83,22 @@ function WorkspaceShell({
               Raw strokes stay in memory for undo and replay
             </div>
           </div>
+
+          <div className="glass-panel absolute bottom-6 right-6 z-30 rounded-2xl px-4 py-3 text-sm text-slate-600">
+            <span className="font-semibold text-slate-800">{status.title}</span>
+            <p className="mt-1 max-w-[260px] text-xs leading-5 text-slate-500">{status.detail}</p>
+          </div>
+
+          <FloatingToolPanel
+            activeTool={activeTool}
+            onToolChange={onToolChange}
+            penColor={settings.penColor}
+            onColorChange={onPenColorChange}
+            replaying={replaying}
+            onReplayToggle={onReplayToggle}
+            layerSummary={layerSummary}
+            conversionMode={conversionMode}
+          />
 
           {children}
         </div>

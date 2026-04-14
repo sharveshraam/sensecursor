@@ -1,9 +1,21 @@
+import { useMemo, useState } from "react";
 import CanvasEngine from "../components/CanvasEngine";
 import WorkspaceShell from "../components/WorkspaceShell";
 import useWorkspaceController from "../hooks/useWorkspaceController";
 
 function Board() {
   const controller = useWorkspaceController("board");
+  const [status, setStatus] = useState({
+    title: "Board ready",
+    detail: "Write naturally, pause to auto-convert, or press Enter to force conversion.",
+  });
+  const layerSummary = useMemo(
+    () => ({
+      strokes: controller.state.strokes.length,
+      text: controller.state.textBlocks.length,
+    }),
+    [controller.state.strokes.length, controller.state.textBlocks.length],
+  );
 
   return (
     <WorkspaceShell
@@ -20,6 +32,12 @@ function Board() {
       onConvert={() => controller.setConvertSignal((value) => value + 1)}
       onExportPdf={controller.handleExportPdf}
       onSaveJson={controller.handleSaveJson}
+      onPenColorChange={(color) => controller.updateSettings("penColor", color)}
+      replaying={controller.replaying}
+      onReplayToggle={() => controller.setReplaying((value) => !value)}
+      layerSummary={layerSummary}
+      conversionMode={controller.settings.cleanTextMode ? "Clean Text" : "Raw Ink"}
+      status={status}
     >
       <input
         ref={controller.colorInputRef}
@@ -35,6 +53,9 @@ function Board() {
         onStateChange={controller.setState}
         panEnabled={controller.panEnabled}
         convertSignal={controller.convertSignal}
+        replaying={controller.replaying}
+        onReplayFinished={() => controller.setReplaying(false)}
+        onStatusChange={setStatus}
       />
     </WorkspaceShell>
   );
