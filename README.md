@@ -62,4 +62,4 @@ and deploys `dist/` to GitHub Pages automatically.
 1. Open your repository on GitHub.
 2. Go to **Settings → Pages**.
 3. Under **Build and deployment**, set **Source** to **GitHub Actions**.
-4. Push to `main` (or `master`) to trigger deployment.
+4. Push to `main`, `master`, or `work` to trigger deployment.
