@@ -16,7 +16,7 @@ export function downloadJson(filename, data) {
 export async function exportWorkspacePdf({
   name,
   strokes = [],
-  textBlocks,
+  textBlocks = [],
   backgroundImage = null,
   width,
   height,

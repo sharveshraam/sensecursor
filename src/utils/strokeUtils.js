@@ -1,6 +1,14 @@
+function createId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+
+  return `stroke-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 export function createStroke(point, color, size, tool = "pen") {
   return {
-    id: crypto.randomUUID(),
+    id: createId(),
     tool,
     color,
     size,

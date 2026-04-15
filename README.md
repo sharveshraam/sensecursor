@@ -41,3 +41,25 @@ Backend runs at [http://127.0.0.1:8000](http://127.0.0.1:8000).
 - Clean Text Mode is on by default.
 - The backend currently returns dummy OCR text (`hello`).
 - PDF editing is implemented as a phase-one upload + annotation workflow, with deeper page rendering/export composition left as the next hook.
+
+## GitHub Pages Deploy Note
+
+This app uses a relative Vite `base` path (`./`) so compiled assets resolve correctly on both:
+- project pages (`https://<user>.github.io/<repo>/`)
+- user/org root pages (`https://<user>.github.io/`)
+
+If you were seeing a blank page, rebuild and redeploy so `dist/index.html` references relative asset paths.
+
+
+## Deploy Without Local Node.js
+
+If `npm` is not available on your computer, you can still deploy by pushing code to GitHub.
+This repo includes a GitHub Actions workflow that installs Node.js, runs `npm ci`, builds the app,
+and deploys `dist/` to GitHub Pages automatically.
+- The deploy workflow also writes `dist/404.html` from `dist/index.html` for SPA fallback behavior on direct route hits.
+
+### One-time GitHub Pages setup
+1. Open your repository on GitHub.
+2. Go to **Settings → Pages**.
+3. Under **Build and deployment**, set **Source** to **GitHub Actions**.
+4. Push to `main`, `master`, or `work` to trigger deployment.
